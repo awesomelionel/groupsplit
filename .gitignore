@@ -11,6 +11,7 @@
 /test/version_tmp/
 /tmp/
 txt
+_history
 
 # Used by dotenv library to load environment variables.
 .env
