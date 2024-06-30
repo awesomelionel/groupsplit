@@ -4,13 +4,19 @@ require 'dotenv/load'
 require "google/cloud/firestore"
 require "pry"
 require 'date'
+require 'active_support'
+require 'active_support/core_ext/time'
 
 
 TOKEN = ENV["TELEGRAM_TOKEN"]
 DEFAULT_CURRENCY = ENV["DEFAULT_CURRENCY"]
+BOT_USERNAME = ENV["BOT_USERNAME"]
 set :bind, "0.0.0.0"
 port = ENV["PORT"] || "8080"
 set :port, port
+
+#Set default timezone
+singapore_tz = ActiveSupport::TimeZone.new("Singapore")
 
 bot = Telegram::Bot::Client.new(TOKEN)
 
@@ -61,16 +67,23 @@ post '/webhook' do
 
     # Case: /start for all new bot chats
     when '/start'
-      bot.api.send_message(chat_id: chat_id, text: "Hello, I am your expense tracker bot. Please add expenses in the format: '[Expense Item] [Amount] [currency (optional)]'. For example, 'Lunch 20 USD' or 'Coffee 5'. Use '+' before the amount to indicate income, e.g., 'Salary +2000 USD'.")
+      bot.api.send_message(chat_id: chat_id, text: "Hello, I am your expense tracker bot. Please add transactions in the format: '@EvenStevensBot [Item] [Amount] [currency (optional)]'. For example, '@EvenStevens Lunch 20 USD' or '@EvenStevens Salary +2000 USD'.")
     when '/stats'
-      n = DateTime.now
-      start_of_month = Date.new(n.year, n.month)
-      end_of_month = Date.new(n.year, n.month, -1)
+      # Get current time in Singapore
+      current_time = Time.now.in_time_zone(singapore_tz)
+
+      # Define start and end of the current month in Singapore time
+      start_of_month = current_time.beginning_of_month
+      end_of_month = current_time.end_of_month
+
+      # Convert start and end of month to UTC
+      start_of_month_utc = start_of_month.utc.iso8601
+      end_of_month_utc = end_of_month.utc.iso8601
 
       expenses = firestore.collection("chats/#{chat_id}/transactions")
                          .where("transaction_type", "==", "expense")
-                         .where("created_at", ">=", start_of_month.to_time.utc.iso8601)
-                         .where("created_at", "<=", end_of_month.to_time.utc.iso8601)
+                         .where("created_at", ">=", start_of_month_utc)
+                         .where("created_at", "<=", end_of_month_utc)
                          .get
 
       total_expense = 0
@@ -113,47 +126,49 @@ post '/webhook' do
 
       bot.api.send_message(chat_id: chat_id, text: response_text, parse_mode: "html")
     else
-      if message.match(/^(.+?)\s+([+-]?\d+(\.\d{1,2})?)\s*(\w{3})?$/)
-        item = $1.strip
-        amount = $2.to_f
-        is_income = $2.start_with?('+')
-        amount = amount.abs if is_income # Ensure amount is positive for income
-        currency = $4 ? $4.upcase : DEFAULT_CURRENCY
+      if message.start_with?('@EvenStevensBot')
+        if message.match(/^@EvenStevensBot\s+(.+?)\s+([+-]?\d+(\.\d{1,2})?)\s*(\w{3})?$/)
+          item = $1.strip
+          amount = $2.to_f
+          is_income = $2.start_with?('+')
+          amount = amount.abs if is_income # Ensure amount is positive for income
+          currency = $4 ? $4.upcase : DEFAULT_CURRENCY
 
-        # Store pending expense or income in Firestore
-        firestore.collection("chats/#{chat_id}/pending_expenses").doc(user_id).set({
-          created_at: Time.now.utc.iso8601,
-          name: item,
-          amount: amount,
-          user_id: user_id,
-          user_first_name: first_name,
-          currency: currency,
-          transaction_type: is_income ? 'income' : 'expense'
-        })
+          # Store pending expense or income in Firestore
+          firestore.collection("chats/#{chat_id}/pending_expenses").doc(user_id).set({
+            created_at: Time.now.utc.iso8601,
+            name: item,
+            amount: amount,
+            user_id: user_id,
+            user_first_name: first_name,
+            currency: currency,
+            transaction_type: is_income ? 'income' : 'expense'
+          })
 
-        unless is_income
-          # Send inline keyboard for category selection for expenses only
-          kb = VALID_CATEGORIES.map do |category|
-            Telegram::Bot::Types::InlineKeyboardButton.new(text: category, callback_data: "category_#{category}")
-          end.each_slice(2).to_a
+          unless is_income
+            # Send inline keyboard for category selection for expenses only
+            kb = VALID_CATEGORIES.map do |category|
+              Telegram::Bot::Types::InlineKeyboardButton.new(text: category, callback_data: "category_#{category}")
+            end.each_slice(2).to_a
 
-          bot.api.send_message(
-            chat_id: chat_id,
-            text: "Please select a category for the expense:",
-            reply_markup: Telegram::Bot::Types::InlineKeyboardMarkup.new(inline_keyboard: kb)
-          )
+            bot.api.send_message(
+              chat_id: chat_id,
+              text: "Please select a category for the expense:",
+              reply_markup: Telegram::Bot::Types::InlineKeyboardMarkup.new(inline_keyboard: kb)
+            )
+          else
+            # Directly store the income transaction and inform the user
+            pending_expense_ref = firestore.doc("chats/#{chat_id}/pending_expenses/#{user_id}")
+            expense_data = pending_expense_ref.get.data
+            
+            firestore.collection("chats/#{chat_id}/transactions").add(expense_data)
+            pending_expense_ref.delete
+
+            bot.api.send_message(chat_id: chat_id, text: "<b>#{expense_data[:user_first_name]}</b> added income: #{expense_data[:name]}  $#{expense_data[:amount]} #{expense_data[:currency]}", parse_mode: "html")
+          end
         else
-          # Directly store the income transaction and inform the user
-          pending_expense_ref = firestore.doc("chats/#{chat_id}/pending_expenses/#{user_id}")
-          expense_data = pending_expense_ref.get.data
-          
-          firestore.collection("chats/#{chat_id}/transactions").add(expense_data)
-          pending_expense_ref.delete
-
-          bot.api.send_message(chat_id: chat_id, text: "<b>#{expense_data[:user_first_name]}</b> added income: #{expense_data[:name]}  $#{expense_data[:amount]} #{expense_data[:currency]}", parse_mode: "html")
+          bot.api.send_message(chat_id: chat_id, text: "I don't understand that format. Please add transactions in the format: '@EvenStevensBot [Item] [Amount] [currency (optional)]'. For example, '@EvenStevens Lunch 20 USD' or '@EvenStevens Salary +2000 USD'.")
         end
-      else
-        bot.api.send_message(chat_id: chat_id, text: "I don't understand that format. Please add transactions in the format: '[Item] [Amount] [currency (optional)]'. For example, 'Lunch 20 USD' or 'Salary +2000 USD'.")
       end
     end
   elsif update['callback_query']
