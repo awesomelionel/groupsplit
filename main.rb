@@ -48,7 +48,11 @@ class ExpenseBot
     case text
     when '/start'
       send_welcome_message(chat_id)
+    when "/start#{BOT_USERNAME}"
+      send_welcome_message(chat_id)
     when '/stats'
+      send_stats(chat_id)
+    when "/stats#{BOT_USERNAME}"
       send_stats(chat_id)
     else
       handle_expense_message(text, chat_id, user_id, first_name) if text.start_with?("@#{BOT_USERNAME}")
@@ -229,7 +233,14 @@ expense_bot = ExpenseBot.new
 post '/webhook' do
   update = JSON.parse(request.body.read)
   puts JSON.pretty_generate(update)
+  puts request.env
 
-  expense_bot.handle_webhook(update)
-  status 200
+  secret_token = request.env['HTTP_X_TELEGRAM_BOT_API_SECRET_TOKEN']
+
+  if secret_token == ENV["SECRET_TOKEN"]
+    expense_bot.handle_webhook(update)
+    status 200
+  else
+    status 403
+  end
 end
