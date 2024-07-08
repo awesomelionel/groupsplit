@@ -20,6 +20,9 @@ class ExpenseBot
     '🏠 Housing and utilities', '🛒 Groceries', '🍔 Outside food', '👖 Clothes and 👟 shoes',
     '🪥 Household', '🚌 Commuting', '🍿 Entertainment'
   ]
+  #VALID_TIMEZONES = ActiveSupport::TimeZone.all.map(&:name)
+  VALID_CURRENCIES = ['🇺🇸 USD', '🇸🇬 SGD', '🇪🇺 EUR', '🇬🇧 GBP', '🇯🇵 JPY', '🇲🇾 MYR', '🇮🇩 IDR', '🇵🇭 PHP', '🇹🇭 THB']
+
 
   def initialize
     @bot = Telegram::Bot::Client.new(TOKEN)
@@ -48,12 +51,20 @@ class ExpenseBot
     case text
     when '/start'
       send_welcome_message(chat_id)
-    when "/start#{BOT_USERNAME}"
+    when "/start@#{BOT_USERNAME}"
+      send_welcome_message(chat_id)
+    when '/help'
+      send_welcome_message(chat_id)
+    when "/help@#{BOT_USERNAME}"
       send_welcome_message(chat_id)
     when '/stats'
       send_stats(chat_id)
-    when "/stats#{BOT_USERNAME}"
+    when "/stats@#{BOT_USERNAME}"
       send_stats(chat_id)
+    when '/settings'
+      send_settings_options(chat_id)
+    when "/settings@#{BOT_USERNAME}"
+      send_settings_options(chat_id)
     else
       handle_expense_message(text, chat_id, user_id, first_name) if text.start_with?("@#{BOT_USERNAME}")
     end
@@ -61,7 +72,7 @@ class ExpenseBot
 
   def handle_expense_message(text, chat_id, user_id, first_name)
     if text.match(/^@#{BOT_USERNAME}\s+(.+?)\s+([+-]?\d+(\.\d{1,2})?)\s*(\w{3})?$/)
-      item, amount, currency = parse_expense_message(text)
+      item, amount, currency = parse_expense_message(text, chat_id)
       is_income = amount.start_with?('+')
       amount = amount.to_f.abs
 
@@ -77,12 +88,17 @@ class ExpenseBot
     end
   end
 
-  def parse_expense_message(text)
+  def parse_expense_message(text, chat_id)
     match_data = text.match(/^@#{BOT_USERNAME}\s+(.+?)\s+([+-]?\d+(\.\d{1,2})?)\s*(\w{3})?$/)
     item = match_data[1].strip
     amount = match_data[2]
-    currency = match_data[4] ? match_data[4].upcase : DEFAULT_CURRENCY
+    currency = match_data[4] ? match_data[4].upcase : fetch_default_currency(chat_id)
     [item, amount, currency]
+  end
+
+  def fetch_default_currency(chat_id)
+    chat_data = @firestore.doc("chats/#{chat_id}").get.data
+    chat_data[:default_currency] || DEFAULT_CURRENCY
   end
 
   def store_pending_expense(chat_id, user_id, first_name, item, amount, currency, is_income)
@@ -120,7 +136,13 @@ class ExpenseBot
   end
 
   def send_invalid_format_message(chat_id)
-    @bot.api.send_message(chat_id: chat_id, text: "I don't understand that format. Please add transactions in the format: '@#{BOT_USERNAME} [Item] [Amount] [currency (optional)]'. For example, '@#{BOT_USERNAME} Lunch 20 USD' or '@#{BOT_USERNAME} Salary +2000 USD'.")
+    invalid_format_message_txt = "<b>Hello!</b>, I am your expense tracker bot.\n\n" \
+                          "Please add transactions in the format: '@#{BOT_USERNAME} [Item] [Amount] [currency (optional)]'.\n\n" \
+                          "For example, '@#{BOT_USERNAME} Lunch 20 SGD' or '@#{BOT_USERNAME} Starbucks Coffee 20'.\n\n" \
+                          "You can even add Income with '@#{BOT_USERNAME} Salary +2000 SGD'.\n\n" \
+                          "The Default currency is SGD. You can change it in the '/settings' command";
+
+    @bot.api.send_message(chat_id: chat_id, text: invalid_format_message_txt, parse_mode: "html" )
   end
 
   def handle_callback(callback_query)
@@ -130,6 +152,14 @@ class ExpenseBot
 
     if callback_data.start_with?('category_')
       handle_category_selection(callback_data, chat_id, user_id)
+    elsif callback_data.start_with?('settings_currency')
+      send_currency_keyboard(chat_id)
+    elsif callback_data.start_with?('currency_')
+      handle_currency_selection(callback_data, chat_id)
+    elsif callback_data.start_with?('settings_timezone')
+      send_timezone_keyboard(chat_id)
+    elsif callback_data.start_with?('timezone_')
+      handle_timezone_selection(callback_data, chat_id)
     end
   end
 
@@ -150,8 +180,64 @@ class ExpenseBot
     end
   end
 
+  def handle_settings_selection(callback_data, chat_id, user_id)
+    setting, value = callback_data.sub('settings_', '').split('_', 2)
+    case setting
+    when 'currency'
+      update_default_currency(chat_id, value)
+    when 'timezone'
+      update_default_timezone(chat_id, value)
+    end
+  end
+
+  def handle_currency_selection(callback_data, chat_id)
+    currency = callback_data.sub('currency_', '')
+
+    if VALID_CURRENCIES.include?(currency)
+      @firestore.doc("chats/#{chat_id}").set({ default_currency: currency }, merge: true)
+      @bot.api.send_message(chat_id: chat_id, text: "Default currency updated to #{currency}.")
+    else
+      @bot.api.send_message(chat_id: chat_id, text: "Invalid currency selected.")
+    end
+  end
+
+  def handle_timezone_selection(callback_data, chat_id)
+    timezone = callback_data.sub('timezone_', '')
+
+    if VALID_TIMEZONES.include?(timezone)
+      @firestore.doc("chats/#{chat_id}").set({ default_timezone: timezone }, merge: true)
+      @bot.api.send_message(chat_id: chat_id, text: "Default timezone updated to #{timezone}.")
+    else
+      @bot.api.send_message(chat_id: chat_id, text: "Invalid timezone selected.")
+    end
+  end
+
+  def update_default_currency(chat_id, currency)
+    if VALID_CURRENCIES.include?(currency)
+      @firestore.doc("chats/#{chat_id}").set({ default_currency: currency }, merge: true)
+      @bot.api.send_message(chat_id: chat_id, text: "Default currency updated to #{currency}.")
+    else
+      @bot.api.send_message(chat_id: chat_id, text: "Invalid currency selected.")
+    end
+  end
+
+  def update_default_timezone(chat_id, timezone)
+    if VALID_TIMEZONES.include?(timezone)
+      @firestore.doc("chats/#{chat_id}").set({ default_timezone: timezone }, merge: true)
+      @bot.api.send_message(chat_id: chat_id, text: "Default timezone updated to #{timezone}.")
+    else
+      @bot.api.send_message(chat_id: chat_id, text: "Invalid timezone selected.")
+    end
+  end
+
   def send_welcome_message(chat_id)
-    @bot.api.send_message(chat_id: chat_id, text: "Hello, I am your expense tracker bot. Please add transactions in the format: '@#{BOT_USERNAME} [Item] [Amount] [currency (optional)]'. For example, '@#{BOT_USERNAME} Lunch 20 USD' or '@#{BOT_USERNAME} Salary +2000 USD'.")
+    welcome_message_text = "<b>Hello!</b>, I am your expense tracker bot.\n\n" \
+                          "Please add transactions in the format: '@#{BOT_USERNAME} [Item] [Amount] [currency (optional)]'.\n\n" \
+                          "For example, '@#{BOT_USERNAME} Lunch 20 SGD' or '@#{BOT_USERNAME} Starbucks Coffee 20'.\n\n" \
+                          "You can even add Income with '@#{BOT_USERNAME} Salary +2000 SGD'.\n\n" \
+                          "The Default currency is SGD. You can change it in the '/settings' command";
+
+    @bot.api.send_message(chat_id: chat_id, text: welcome_message_text, parse_mode: "html" )
   end
 
   def send_stats(chat_id)
@@ -174,6 +260,43 @@ class ExpenseBot
     end
 
     @bot.api.send_message(chat_id: chat_id, text: response_text, parse_mode: "html")
+  end
+
+  def send_settings_options(chat_id)
+    kb = [
+      Telegram::Bot::Types::InlineKeyboardButton.new(text: 'Change Default Currency', callback_data: 'settings_currency')
+      #,Telegram::Bot::Types::InlineKeyboardButton.new(text: 'Change Default Timezone', callback_data: 'settings_timezone')
+    ]
+
+    @bot.api.send_message(
+      chat_id: chat_id,
+      text: "Please choose a setting to configure:",
+      reply_markup: Telegram::Bot::Types::InlineKeyboardMarkup.new(inline_keyboard: kb.each_slice(1).to_a)
+    )
+  end
+
+  def send_currency_keyboard(chat_id)
+    kb = VALID_CURRENCIES.map do |currency|
+      Telegram::Bot::Types::InlineKeyboardButton.new(text: currency, callback_data: "currency_#{currency}")
+    end.each_slice(2).to_a
+
+    @bot.api.send_message(
+      chat_id: chat_id,
+      text: "Please choose a new default currency:",
+      reply_markup: Telegram::Bot::Types::InlineKeyboardMarkup.new(inline_keyboard: kb)
+    )
+  end
+
+  def send_timezone_keyboard(chat_id)
+    kb = VALID_TIMEZONES.map do |timezone|
+      Telegram::Bot::Types::InlineKeyboardButton.new(text: timezone, callback_data: "timezone_#{timezone}")
+    end.each_slice(2).to_a
+
+    @bot.api.send_message(
+      chat_id: chat_id,
+      text: "Please choose a new default timezone:",
+      reply_markup: Telegram::Bot::Types::InlineKeyboardMarkup.new(inline_keyboard: kb)
+    )
   end
 
   def calculate_expenses(expenses)
@@ -233,7 +356,6 @@ expense_bot = ExpenseBot.new
 post '/webhook' do
   update = JSON.parse(request.body.read)
   puts JSON.pretty_generate(update)
-  puts request.env
 
   secret_token = request.env['HTTP_X_TELEGRAM_BOT_API_SECRET_TOKEN']
 
