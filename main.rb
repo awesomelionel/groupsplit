@@ -55,7 +55,7 @@ class ExpenseBot
       send_welcome_message(chat_id)
     when '/help'
       send_welcome_message(chat_id)
-    when "/help@#{BOT_USERNAME}"
+    when "/start@#{BOT_USERNAME}"
       send_welcome_message(chat_id)
     when '/stats'
       send_stats(chat_id)
@@ -71,7 +71,7 @@ class ExpenseBot
   end
 
   def handle_expense_message(text, chat_id, user_id, first_name)
-    if text.match(/^@#{BOT_USERNAME}\s+(.+?)\s+([+-]?\d+(\.\d{1,2})?)\s*(\w{3})?$/)
+    if text.match(/^@#{BOT_USERNAME}\s+(.+?)\s+\$?([+-]?\d+(\.\d{1,2})?)\s*(\w{3})?$/)
       item, amount, currency = parse_expense_message(text, chat_id)
       is_income = amount.start_with?('+')
       amount = amount.to_f.abs
@@ -89,7 +89,7 @@ class ExpenseBot
   end
 
   def parse_expense_message(text, chat_id)
-    match_data = text.match(/^@#{BOT_USERNAME}\s+(.+?)\s+([+-]?\d+(\.\d{1,2})?)\s*(\w{3})?$/)
+    match_data = text.match(/^@#{BOT_USERNAME}\s+(.+?)\s+\$?([+-]?\d+(\.\d{1,2})?)\s*(\w{3})?$/)
     item = match_data[1].strip
     amount = match_data[2]
     currency = match_data[4] ? match_data[4].upcase : fetch_default_currency(chat_id)
@@ -332,11 +332,51 @@ class ExpenseBot
     end.join("\n")
 
     split_amount = total_expense / user_totals.keys.size
+    balances = calculate_balances(user_totals, split_amount)
+
+    balances_text = balances.map do |user, balance|
+      if balance > 0
+        "#{user_names[user]} is owed $#{'%.2f' % balance}"
+      else
+        "#{user_names[user]} owes $#{'%.2f' % balance.abs}"
+      end
+    end.join("\n")
+  
+    # Calculate net transactions required to balance the expenses
+    net_transactions = calculate_net_transactions(balances, user_names)
 
     "Total expenses for the month of #{Date.today.strftime("%B")}: <b>$#{'%.2f' % total_expense}</b>\n\n" \
     "<b>Breakdown by category:</b>\n#{category_percentages}\n\n" \
     "<b>Expenses by user:</b>\n#{user_expenses}\n\n" \
-    "Each person should pay: <b>$#{'%.2f' % split_amount}</b>\n\n"
+    "Each person should pay: <b>$#{'%.2f' % split_amount}</b>\n\n" \
+    "<b>Balances:</b>\n#{balances_text}\n\n" \
+    "<b>Net Transactions to Settle Balances:</b>\n#{net_transactions}\n\n"
+  end
+
+  def calculate_balances(user_totals, split_amount)
+    user_totals.transform_values { |amount| amount - split_amount }
+  end
+
+  def calculate_net_transactions(balances, user_names)
+    positive_balances = balances.select { |_, balance| balance > 0 }
+    negative_balances = balances.select { |_, balance| balance < 0 }
+  
+    transactions = []
+  
+    positive_balances.each do |user_pos, balance_pos|
+      negative_balances.each do |user_neg, balance_neg|
+        next if balance_pos == 0 || balance_neg == 0
+  
+        amount = [balance_pos, balance_neg.abs].min
+  
+        transactions << "#{user_names[user_neg]} should pay #{user_names[user_pos]} $#{'%.2f' % amount}"
+  
+        positive_balances[user_pos] -= amount
+        negative_balances[user_neg] += amount
+      end
+    end
+  
+    transactions.join("\n")
   end
 
   def ensure_chat_and_user(chat_id, user_id, first_name)
