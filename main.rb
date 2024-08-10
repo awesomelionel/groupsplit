@@ -48,6 +48,14 @@ class ExpenseBot
 
     ensure_chat_and_user(chat_id, user_id, first_name)
 
+    if message['reply_to_message']
+      original_message = message['reply_to_message']['text']
+      if original_message.match(/^@#{BOT_USERNAME}\s+(.+?)\s+\$?([+-]?\d+(\.\d{1,2})?)\s*(\w{3})?$/)
+        edit_expense(original_message, text, chat_id, user_id)
+        return
+      end
+    end
+
     case text
     when '/start'
       send_welcome_message(chat_id)
@@ -76,9 +84,16 @@ class ExpenseBot
       is_income = amount.start_with?('+')
       amount = amount.to_f.abs
 
+      # Try to find a previous expense with the same item name
+      previous_category = find_previous_category(chat_id, item)
+
       store_pending_expense(chat_id, user_id, first_name, item, amount, currency, is_income)
 
-      unless is_income
+      if previous_category && !is_income
+        # If a previous category is found, store the expense with this category
+        store_expense_with_category(chat_id, user_id, previous_category)
+      elsif !is_income
+        # Otherwise, prompt the user to select a category
         send_category_keyboard(chat_id)
       else
         store_income(chat_id, user_id)
@@ -86,6 +101,32 @@ class ExpenseBot
     else
       send_invalid_format_message(chat_id)
     end
+  end
+
+  def find_previous_category(chat_id, item)
+    transactions = @firestore.collection("chats/#{chat_id}/transactions")
+                     .where(:name, :==, item.downcase)
+                     .order(:created_at, :desc)
+                     .get
+  
+    transactions.each do |transaction|
+      if transaction[:category]
+        return transaction[:category]
+      end
+    end
+  
+    nil
+  end
+  
+  def store_expense_with_category(chat_id, user_id, category)
+    pending_expense_ref = @firestore.doc("chats/#{chat_id}/pending_expenses/#{user_id}")
+    expense_data = pending_expense_ref.get.data
+    expense_data[:category] = category
+  
+    @firestore.collection("chats/#{chat_id}/transactions").add(expense_data)
+    pending_expense_ref.delete
+  
+    @bot.api.send_message(chat_id: chat_id, text: "<b>#{expense_data[:user_first_name]}</b> added expense: <b>#{expense_data[:name]}</b> <b>#{expense_data[:amount]} #{expense_data[:currency]}</b> in Category <b>#{category}</b>", parse_mode: "html")
   end
 
   def parse_expense_message(text, chat_id)
@@ -389,6 +430,44 @@ class ExpenseBot
     chat_users_ref = @firestore.doc("chats/#{chat_id}/users/#{user_id}")
     chat_users_ref.set({ user_id: user_id }, merge: true)
   end
+
+
+  ### Handle Edit Expense Func
+  def edit_expense(original_message, new_text, chat_id, user_id)
+    # Parse the original and new expense messages
+    original_match = original_message.match(/^@#{BOT_USERNAME}\s+(.+?)\s+\$?([+-]?\d+(\.\d{1,2})?)\s*(\w{3})?$/)
+    new_match = new_text.match(/^@#{BOT_USERNAME}\s+(.+?)\s+\$?([+-]?\d+(\.\d{1,2})?)\s*(\w{3})?$/)
+
+    if original_match && new_match
+      # Extract original and new expense details
+      original_item, original_amount, original_currency = original_match[1], original_match[2].to_f, original_match[4] || DEFAULT_CURRENCY
+      new_item, new_amount, new_currency = new_match[1], new_match[2].to_f, new_match[4] || DEFAULT_CURRENCY
+
+      # Update Firestore transaction record based on the original expense details
+      transactions = @firestore.collection("chats/#{chat_id}/transactions")
+                     .where(:user_id, :==, user_id)
+                     .where(:name, :==, original_item)
+                     .where(:amount, :==, original_amount)
+                     .where(:currency, :==, original_currency)
+                     .get
+
+      if transactions.any?
+        transaction_ref = transactions.first.ref
+        transaction_ref.set({
+          name: new_item,
+          amount: new_amount,
+          currency: new_currency
+        }, merge: true)
+
+        @bot.api.send_message(chat_id: chat_id, text: "Expense updated successfully.")
+      else
+        @bot.api.send_message(chat_id: chat_id, text: "Original expense not found.")
+      end
+    else
+      @bot.api.send_message(chat_id: chat_id, text: "Invalid format for updating expense.")
+    end
+  end
+
 end
 # Initialize the bot
 expense_bot = ExpenseBot.new
