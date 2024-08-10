@@ -121,13 +121,17 @@ class ExpenseBot
   def store_expense_with_category(chat_id, user_id, category)
     pending_expense_ref = @firestore.doc("chats/#{chat_id}/pending_expenses/#{user_id}")
     expense_data = pending_expense_ref.get.data
-    expense_data[:category] = category
+    
+    # Ensure the hash is mutable
+    mutable_expense_data = expense_data.dup.transform_keys(&:to_sym)
   
-    @firestore.collection("chats/#{chat_id}/transactions").add(expense_data)
+    mutable_expense_data[:category] = category
+  
+    @firestore.collection("chats/#{chat_id}/transactions").add(mutable_expense_data)
     pending_expense_ref.delete
   
-    @bot.api.send_message(chat_id: chat_id, text: "<b>#{expense_data[:user_first_name]}</b> added expense: <b>#{expense_data[:name]}</b> <b>#{expense_data[:amount]} #{expense_data[:currency]}</b> in Category <b>#{category}</b>", parse_mode: "html")
-  end
+    @bot.api.send_message(chat_id: chat_id, text: "<b>#{mutable_expense_data[:user_first_name]}</b> added expense: <b>#{mutable_expense_data[:name]}</b> <b>#{mutable_expense_data[:amount]} #{mutable_expense_data[:currency]}</b> in Category <b>#{category}</b>", parse_mode: "html")
+  end 
 
   def parse_expense_message(text, chat_id)
     match_data = text.match(/^@#{BOT_USERNAME}\s+(.+?)\s+\$?([+-]?\d+(\.\d{1,2})?)\s*(\w{3})?$/)
