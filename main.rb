@@ -31,7 +31,6 @@ class ExpenseBot
   end
 
   def handle_webhook(update)
-
     if update['message'] && update['message']['text']
       handle_message(update['message'])
     elsif update['callback_query']
