@@ -21,7 +21,8 @@ class ExpenseBot
     '🪥 Household', '🚌 Commuting', '🍿 Entertainment'
   ]
   #VALID_TIMEZONES = ActiveSupport::TimeZone.all.map(&:name)
-  VALID_CURRENCIES = ['🇺🇸 USD', '🇸🇬 SGD', '🇪🇺 EUR', '🇬🇧 GBP', '🇯🇵 JPY', '🇲🇾 MYR', '🇮🇩 IDR', '🇵🇭 PHP', '🇹🇭 THB']
+  VALID_CURRENCIES = ['🇺🇸 USD', '🇸🇬 SGD', '🇪🇺 EUR', '🇬🇧 GBP', '🇯🇵 JPY', '🇲🇾 MYR', '🇮🇩 IDR', '🇵🇭 PHP', '🇹🇭 THB', 
+'🇰🇷 KRW']
 
 
   def initialize
@@ -78,6 +79,16 @@ class ExpenseBot
     end
   end
 
+  # Handles an expense message from a user.
+  # 
+  # Parameters:
+  #   text (String): The text of the message.
+  #   chat_id (String): The ID of the chat.
+  #   user_id (String): The ID of the user.
+  #   first_name (String): The first name of the user.
+  # 
+  # Returns:
+  #   None
   def handle_expense_message(text, chat_id, user_id, first_name)
     if text.match(/^@#{BOT_USERNAME}\s+(.+?)\s+\$?([+-]?\d+(\.\d{1,2})?)\s*(\w{3})?$/)
       item, amount, currency = parse_expense_message(text, chat_id)
@@ -146,16 +157,19 @@ class ExpenseBot
     chat_data[:default_currency] || DEFAULT_CURRENCY
   end
 
-  def store_pending_expense(chat_id, user_id, first_name, item, amount, currency, is_income)
-    @firestore.collection("chats/#{chat_id}/pending_expenses").doc(user_id).set({
-      created_at: Time.now.utc.iso8601,
-      name: item,
-      amount: amount,
-      user_id: user_id,
-      user_first_name: first_name,
-      currency: currency,
-      transaction_type: is_income ? 'income' : 'expense'
-    })
+  def store_pending_expense(chat_id:, user_id:, first_name:, item:, amount:, currency:, is_income:)
+    @firestore
+      .collection("chats/#{chat_id}/pending_expenses")
+      .doc(user_id)
+      .set(
+        created_at: Time.now.utc.iso8601,
+        name: item,
+        amount: amount,
+        user_id: user_id,
+        user_first_name: first_name,
+        currency: currency,
+        transaction_type: is_income ? 'income' : 'expense'
+      )
   end
 
   def send_category_keyboard(chat_id)
@@ -436,7 +450,14 @@ class ExpenseBot
   end
 
 
-  ### Handle Edit Expense Func
+  ###
+  # Handles the process of editing an expense.
+  #
+  # @param original_message [String] The original expense message.
+  # @param new_text [String] The new expense message.
+  # @param chat_id [Integer] The ID of the chat.
+  # @param user_id [Integer] The ID of the user.
+  ###
   def edit_expense(original_message, new_text, chat_id, user_id)
     # Parse the original and new expense messages
     original_match = original_message.match(/^@#{BOT_USERNAME}\s+(.+?)\s+\$?([+-]?\d+(\.\d{1,2})?)\s*(\w{3})?$/)
@@ -463,16 +484,21 @@ class ExpenseBot
           currency: new_currency
         }, merge: true)
 
+        # Send a message to the chat indicating that the expense was updated successfully
         @bot.api.send_message(chat_id: chat_id, text: "Expense updated successfully.")
       else
+        # Send a message to the chat indicating that the original expense was not found
         @bot.api.send_message(chat_id: chat_id, text: "Original expense not found.")
       end
     else
+      # Send a message to the chat indicating that the format for updating the expense is invalid
       @bot.api.send_message(chat_id: chat_id, text: "Invalid format for updating expense.")
     end
   end
 
 end
+
+
 # Initialize the bot
 expense_bot = ExpenseBot.new
 
