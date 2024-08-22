@@ -327,11 +327,12 @@ class ExpenseBot
   end
 
   def send_welcome_message(chat_id)
-    welcome_message_text = "<b>Hello!</b>, I am your expense tracker bot.\n\n" \
+    welcome_message_text = "<b>Hello!</b> I am your Expense Tracker Bot!\n\n" \
                           "Please add transactions in the format: '@#{BOT_USERNAME} [Item] [Amount] [currency (optional)]'.\n\n" \
                           "For example, '@#{BOT_USERNAME} Lunch 20 SGD' or '@#{BOT_USERNAME} Starbucks Coffee 20'.\n\n" \
                           "You can even add Income with '@#{BOT_USERNAME} Salary +2000 SGD'.\n\n" \
-                          "The Default currency is SGD. You can change it in the '/settings' command";
+                          "The Default currency is SGD. You can change it in the '/settings' command. \n\n" \
+                          "For more information, use the '/help' command.";
 
     @bot.api.send_message(chat_id: chat_id, text: welcome_message_text, parse_mode: "html" )
   end
