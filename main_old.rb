@@ -16,12 +16,12 @@ class ExpenseBot
   DEFAULT_CURRENCY = ENV["DEFAULT_CURRENCY"]
   BOT_USERNAME = ENV["BOT_USERNAME"]
   SINGAPORE_TZ = ActiveSupport::TimeZone.new("Singapore")
-  DEFAULT_CATEGORIES = [
+  VALID_CATEGORIES = [
     '🏠 Housing and utilities', '🛒 Groceries', '🍔 Outside food', '👖 Clothes and 👟 shoes',
     '🪥 Household', '🚌 Commuting', '🍿 Entertainment'
   ]
   #VALID_TIMEZONES = ActiveSupport::TimeZone.all.map(&:name)
-  VALID_CURRENCIES = ['🇺🇸 USD', '🇸🇬 SGD', '🇪🇺 EUR', '🇬🇧 GBP', '🇯🇵 JPY', '🇲🇾 MYR', '🇮🇩 IDR', '🇵🇭 PHP', '🇹🇭 THB', '🇰🇷 KRW']
+  VALID_CURRENCIES = ['🇺🇸 USD', '🇸🇬 SGD', '🇪🇺 EUR', '🇬🇧 GBP', '🇯🇵 JPY', '🇲🇾 MYR', '🇮🇩 IDR', '🇵🇭 PHP', '🇹🇭 THB']
 
 
   def initialize
@@ -48,7 +48,6 @@ class ExpenseBot
 
     ensure_chat_and_user(chat_id, user_id, first_name)
 
-    ## Edit Expense
     if message['reply_to_message']
       original_message = message['reply_to_message']['text']
       if original_message.match(/^@#{BOT_USERNAME}\s+(.+?)\s+\$?([+-]?\d+(\.\d{1,2})?)\s*(\w{3})?$/)
@@ -57,30 +56,25 @@ class ExpenseBot
       end
     end
 
-    ## Category Creation
-    if expecting_new_category?(chat_id)
-      handle_category_creation(message)
+    case text
+    when '/start'
+      send_welcome_message(chat_id)
+    when "/start@#{BOT_USERNAME}"
+      send_welcome_message(chat_id)
+    when '/help'
+      send_welcome_message(chat_id)
+    when "/start@#{BOT_USERNAME}"
+      send_welcome_message(chat_id)
+    when '/stats'
+      send_stats(chat_id)
+    when "/stats@#{BOT_USERNAME}"
+      send_stats(chat_id)
+    when '/settings'
+      send_settings_options(chat_id)
+    when "/settings@#{BOT_USERNAME}"
+      send_settings_options(chat_id)
     else
-      case text
-      when '/start'
-        send_welcome_message(chat_id)
-      when "/start@#{BOT_USERNAME}"
-        send_welcome_message(chat_id)
-      when '/help'
-        send_welcome_message(chat_id)
-      when "/start@#{BOT_USERNAME}"
-        send_welcome_message(chat_id)
-      when '/stats'
-        send_stats(chat_id)
-      when "/stats@#{BOT_USERNAME}"
-        send_stats(chat_id)
-      when '/settings'
-        send_settings_options(chat_id)
-      when "/settings@#{BOT_USERNAME}"
-        send_settings_options(chat_id)
-      else
-        handle_expense_message(text, chat_id, user_id, first_name) if text.start_with?("@#{BOT_USERNAME}")
-      end
+      handle_expense_message(text, chat_id, user_id, first_name) if text.start_with?("@#{BOT_USERNAME}")
     end
   end
 
@@ -165,13 +159,7 @@ class ExpenseBot
   end
 
   def send_category_keyboard(chat_id)
-    chat_doc = @firestore.doc("chats/#{chat_id}")
-    chat_data = chat_doc.get.data
-
-    custom_categories = chat_data[:custom_categories] || []
-    all_categories = DEFAULT_CATEGORIES + custom_categories
-
-    kb = all_categories.map do |category|
+    kb = VALID_CATEGORIES.map do |category|
       Telegram::Bot::Types::InlineKeyboardButton.new(text: category, callback_data: "category_#{category}")
     end.each_slice(2).to_a
 
@@ -179,7 +167,7 @@ class ExpenseBot
       chat_id: chat_id,
       text: "Please select a category for the expense:",
       reply_markup: Telegram::Bot::Types::InlineKeyboardMarkup.new(inline_keyboard: kb)
-     )
+    )
   end
 
   def store_income(chat_id, user_id)
@@ -217,99 +205,42 @@ class ExpenseBot
       send_timezone_keyboard(chat_id)
     elsif callback_data.start_with?('timezone_')
       handle_timezone_selection(callback_data, chat_id)
-    elsif callback_data.start_with?('settings_add_categories')
-      prompt_for_custom_category(chat_id)
     end
-  end
-
-  def prompt_for_custom_category(chat_id)
-    @bot.api.send_message(chat_id: chat_id, text: "Please send the name of the new category you'd like to add:")
-    # Set the expecting_new_category flag to true
-    chat_doc = @firestore.doc("chats/#{chat_id}")
-    chat_doc.set({ expecting_new_category: true }, merge: true)
-  end
-
-  def expecting_new_category?(chat_id)
-    # Check Firestore for a state flag indicating if the bot is expecting a new category
-    chat_doc = @firestore.doc("chats/#{chat_id}")
-    chat_data = chat_doc.get.data
-  
-    chat_data && chat_data[:expecting_new_category] == true
-  end
-
-  # Capture the new category from user
-  def handle_category_creation(message)
-    chat_id = message['chat']['id'].to_s
-    new_category = message['text'].strip
-
-    if new_category.empty?
-      @bot.api.send_message(chat_id: chat_id, text: "Category name cannot be empty. Please try again.")
-      return
-    end
-
-    add_custom_category(chat_id, new_category)
-    @bot.api.send_message(chat_id: chat_id, text: "Category '#{new_category}' added successfully.")
-  end
-
-  # Add the custom category to Firestore
-  def add_custom_category(chat_id, new_category)
-    chat_doc = @firestore.doc("chats/#{chat_id}")
-    chat_data = chat_doc.get.data || {}
-
-    custom_categories = chat_data[:custom_categories] || []
-    custom_categories << new_category unless custom_categories.include?(new_category)
-
-    chat_doc.set({ custom_categories: custom_categories }, merge: true)
-    chat_doc.set({ expecting_new_category: false }, merge: true)
   end
 
   def handle_category_selection(callback_data, chat_id, user_id)
-    # Remove the 'category_' prefix to get the category name
     category = callback_data.sub('category_', '')
 
-    # Retrieve custom categories from Firestore
-    chat_doc = @firestore.doc("chats/#{chat_id}")
-    chat_data = chat_doc.get.data
-    custom_categories = chat_data[:custom_categories] || []
-
-    # Combine default categories with custom categories
-    all_categories = DEFAULT_CATEGORIES + custom_categories
-
-    if all_categories.include?(category)
-      # Reference to the pending expense document for the user
+    if VALID_CATEGORIES.include?(category)
       pending_expense_ref = @firestore.doc("chats/#{chat_id}/pending_expenses/#{user_id}")
-      # Update the pending expense with the selected category
       pending_expense_ref.set({ category: category }, merge: true)
-
-      # Retrieve the updated expense data
       expense_data = pending_expense_ref.get.data
 
-      # Add the expense data to the transactions collection
       @firestore.collection("chats/#{chat_id}/transactions").add(expense_data)
-
-      # Delete the pending expense document
       pending_expense_ref.delete
 
-      # Send a confirmation message to the user
-      @bot.api.send_message(
-        chat_id: chat_id,
-        text: "<b>#{expense_data[:user_first_name]}</b> added expense: <b>#{expense_data[:name]}</b> <b>#{expense_data[:amount]} #{expense_data[:currency]}</b> in Category <b>#{expense_data[:category]}</b>",
-        parse_mode: "html"
-      )
+      @bot.api.send_message(chat_id: chat_id, text: "<b>#{expense_data[:user_first_name]}</b> added expense: <b>#{expense_data[:name]}</b> <b>#{expense_data[:amount]} #{expense_data[:currency]}</b> in Category <b>#{expense_data[:category]}</b>", parse_mode: "html")
     else
-      # Handle the case where an invalid category was selected
       @bot.api.send_message(chat_id: chat_id, text: "Invalid category selected.")
     end
   end
 
-  def handle_currency_selection(callback_data, chat_id)
-    currency_with_emoji = callback_data.sub('currency_', '')
-    # Strip the first two characters (emoji and space) and any trailing whitespace
-    currency_code = currency_with_emoji[2..-1].strip
+  def handle_settings_selection(callback_data, chat_id, user_id)
+    setting, value = callback_data.sub('settings_', '').split('_', 2)
+    case setting
+    when 'currency'
+      update_default_currency(chat_id, value)
+    when 'timezone'
+      update_default_timezone(chat_id, value)
+    end
+  end
 
-    if VALID_CURRENCIES.include?(currency_with_emoji)
-      @firestore.doc("chats/#{chat_id}").set({ default_currency: currency_code }, merge: true)
-      @bot.api.send_message(chat_id: chat_id, text: "Default currency updated to #{currency_with_emoji}.")
+  def handle_currency_selection(callback_data, chat_id)
+    currency = callback_data.sub('currency_', '')
+
+    if VALID_CURRENCIES.include?(currency)
+      @firestore.doc("chats/#{chat_id}").set({ default_currency: currency }, merge: true)
+      @bot.api.send_message(chat_id: chat_id, text: "Default currency updated to #{currency}.")
     else
       @bot.api.send_message(chat_id: chat_id, text: "Invalid currency selected.")
     end
@@ -318,6 +249,24 @@ class ExpenseBot
   def handle_timezone_selection(callback_data, chat_id)
     timezone = callback_data.sub('timezone_', '')
 
+    if VALID_TIMEZONES.include?(timezone)
+      @firestore.doc("chats/#{chat_id}").set({ default_timezone: timezone }, merge: true)
+      @bot.api.send_message(chat_id: chat_id, text: "Default timezone updated to #{timezone}.")
+    else
+      @bot.api.send_message(chat_id: chat_id, text: "Invalid timezone selected.")
+    end
+  end
+
+  def update_default_currency(chat_id, currency)
+    if VALID_CURRENCIES.include?(currency)
+      @firestore.doc("chats/#{chat_id}").set({ default_currency: currency }, merge: true)
+      @bot.api.send_message(chat_id: chat_id, text: "Default currency updated to #{currency}.")
+    else
+      @bot.api.send_message(chat_id: chat_id, text: "Invalid currency selected.")
+    end
+  end
+
+  def update_default_timezone(chat_id, timezone)
     if VALID_TIMEZONES.include?(timezone)
       @firestore.doc("chats/#{chat_id}").set({ default_timezone: timezone }, merge: true)
       @bot.api.send_message(chat_id: chat_id, text: "Default timezone updated to #{timezone}.")
@@ -360,8 +309,7 @@ class ExpenseBot
 
   def send_settings_options(chat_id)
     kb = [
-      Telegram::Bot::Types::InlineKeyboardButton.new(text: 'Change Default Currency', callback_data: 'settings_currency'),
-      Telegram::Bot::Types::InlineKeyboardButton.new(text: 'Add Categories', callback_data: 'settings_add_categories')
+      Telegram::Bot::Types::InlineKeyboardButton.new(text: 'Change Default Currency', callback_data: 'settings_currency')
       #,Telegram::Bot::Types::InlineKeyboardButton.new(text: 'Change Default Timezone', callback_data: 'settings_timezone')
     ]
 
@@ -478,47 +426,34 @@ class ExpenseBot
 
   def ensure_chat_and_user(chat_id, user_id, first_name)
     chat_ref = @firestore.doc("chats/#{chat_id}")
-    chat_data = chat_ref.get.data || {}
-
-    unless chat_data.key?(:custom_categories)
-      chat_ref.set({ custom_categories: [] }, merge: true)
-    end
-
     chat_ref.set({ chat_id: chat_id }, merge: true)
 
     user_ref = @firestore.doc("users/#{user_id}")
     user_ref.set({ user_id: user_id, first_name: first_name }, merge: true)
 
     chat_users_ref = @firestore.doc("chats/#{chat_id}/users/#{user_id}")
-    chat_users_ref.set({ user_id: user_id }, merge: true) 
+    chat_users_ref.set({ user_id: user_id }, merge: true)
   end
 
 
   ### Handle Edit Expense Func
   def edit_expense(original_message, new_text, chat_id, user_id)
-    # Retrieve the default currency from Firestore
-    chat_ref = @firestore.doc("chats/#{chat_id}")
-    chat_data = chat_ref.get.data || {}
-    default_currency = chat_data[:default_currency] || DEFAULT_CURRENCY
-
-    puts default_currency
-
     # Parse the original and new expense messages
     original_match = original_message.match(/^@#{BOT_USERNAME}\s+(.+?)\s+\$?([+-]?\d+(\.\d{1,2})?)\s*(\w{3})?$/)
     new_match = new_text.match(/^@#{BOT_USERNAME}\s+(.+?)\s+\$?([+-]?\d+(\.\d{1,2})?)\s*(\w{3})?$/)
 
     if original_match && new_match
       # Extract original and new expense details
-      original_item, original_amount, original_currency = original_match[1], original_match[2].to_f, original_match[4] || default_currency
-      new_item, new_amount, new_currency = new_match[1], new_match[2].to_f, new_match[4] || default_currency
+      original_item, original_amount, original_currency = original_match[1], original_match[2].to_f, original_match[4] || DEFAULT_CURRENCY
+      new_item, new_amount, new_currency = new_match[1], new_match[2].to_f, new_match[4] || DEFAULT_CURRENCY
 
       # Update Firestore transaction record based on the original expense details
       transactions = @firestore.collection("chats/#{chat_id}/transactions")
-                            .where("user_id", "==", user_id)
-                            .where("name", "==", original_item)
-                            .where("amount", "==", original_amount)
-                            .where("currency", "==", original_currency)
-                            .get
+                     .where(:user_id, :==, user_id)
+                     .where(:name, :==, original_item)
+                     .where(:amount, :==, original_amount)
+                     .where(:currency, :==, original_currency)
+                     .get
 
       if transactions.any?
         transaction_ref = transactions.first.ref
