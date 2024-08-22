@@ -16,7 +16,7 @@ class ExpenseBot
   DEFAULT_CURRENCY = ENV["DEFAULT_CURRENCY"]
   BOT_USERNAME = ENV["BOT_USERNAME"]
   SINGAPORE_TZ = ActiveSupport::TimeZone.new("Singapore")
-  VALID_CATEGORIES = [
+  DEFAULT_CATEGORIES = [
     '🏠 Housing and utilities', '🛒 Groceries', '🍔 Outside food', '👖 Clothes and 👟 shoes',
     '🪥 Household', '🚌 Commuting', '🍿 Entertainment'
   ]
@@ -48,6 +48,7 @@ class ExpenseBot
 
     ensure_chat_and_user(chat_id, user_id, first_name)
 
+    ## Edit Expense
     if message['reply_to_message']
       original_message = message['reply_to_message']['text']
       if original_message.match(/^@#{BOT_USERNAME}\s+(.+?)\s+\$?([+-]?\d+(\.\d{1,2})?)\s*(\w{3})?$/)
@@ -56,25 +57,30 @@ class ExpenseBot
       end
     end
 
-    case text
-    when '/start'
-      send_welcome_message(chat_id)
-    when "/start@#{BOT_USERNAME}"
-      send_welcome_message(chat_id)
-    when '/help'
-      send_welcome_message(chat_id)
-    when "/start@#{BOT_USERNAME}"
-      send_welcome_message(chat_id)
-    when '/stats'
-      send_stats(chat_id)
-    when "/stats@#{BOT_USERNAME}"
-      send_stats(chat_id)
-    when '/settings'
-      send_settings_options(chat_id)
-    when "/settings@#{BOT_USERNAME}"
-      send_settings_options(chat_id)
+    ## Category Creation
+    if expecting_new_category?(chat_id)
+      handle_category_creation(message)
     else
-      handle_expense_message(text, chat_id, user_id, first_name) if text.start_with?("@#{BOT_USERNAME}")
+      case text
+      when '/start'
+        send_welcome_message(chat_id)
+      when "/start@#{BOT_USERNAME}"
+        send_welcome_message(chat_id)
+      when '/help'
+        send_welcome_message(chat_id)
+      when "/start@#{BOT_USERNAME}"
+        send_welcome_message(chat_id)
+      when '/stats'
+        send_stats(chat_id)
+      when "/stats@#{BOT_USERNAME}"
+        send_stats(chat_id)
+      when '/settings'
+        send_settings_options(chat_id)
+      when "/settings@#{BOT_USERNAME}"
+        send_settings_options(chat_id)
+      else
+        handle_expense_message(text, chat_id, user_id, first_name) if text.start_with?("@#{BOT_USERNAME}")
+      end
     end
   end
 
@@ -159,7 +165,13 @@ class ExpenseBot
   end
 
   def send_category_keyboard(chat_id)
-    kb = VALID_CATEGORIES.map do |category|
+    chat_doc = @firestore.doc("chats/#{chat_id}")
+    chat_data = chat_doc.get.data
+
+    custom_categories = chat_data[:custom_categories] || []
+    all_categories = DEFAULT_CATEGORIES + custom_categories
+
+    kb = all_categories.map do |category|
       Telegram::Bot::Types::InlineKeyboardButton.new(text: category, callback_data: "category_#{category}")
     end.each_slice(2).to_a
 
@@ -167,7 +179,7 @@ class ExpenseBot
       chat_id: chat_id,
       text: "Please select a category for the expense:",
       reply_markup: Telegram::Bot::Types::InlineKeyboardMarkup.new(inline_keyboard: kb)
-    )
+     )
   end
 
   def store_income(chat_id, user_id)
@@ -205,22 +217,87 @@ class ExpenseBot
       send_timezone_keyboard(chat_id)
     elsif callback_data.start_with?('timezone_')
       handle_timezone_selection(callback_data, chat_id)
+    elsif callback_data.start_with?('settings_add_categories')
+      prompt_for_custom_category(chat_id)
     end
   end
 
+  def prompt_for_custom_category(chat_id)
+    @bot.api.send_message(chat_id: chat_id, text: "Please send the name of the new category you'd like to add:")
+    # Set the expecting_new_category flag to true
+    chat_doc = @firestore.doc("chats/#{chat_id}")
+    chat_doc.set({ expecting_new_category: true }, merge: true)
+  end
+
+  def expecting_new_category?(chat_id)
+    # Check Firestore for a state flag indicating if the bot is expecting a new category
+    chat_doc = @firestore.doc("chats/#{chat_id}")
+    chat_data = chat_doc.get.data
+  
+    chat_data && chat_data[:expecting_new_category] == true
+  end
+
+  # Capture the new category from user
+  def handle_category_creation(message)
+    chat_id = message['chat']['id'].to_s
+    new_category = message['text'].strip
+
+    if new_category.empty?
+      @bot.api.send_message(chat_id: chat_id, text: "Category name cannot be empty. Please try again.")
+      return
+    end
+
+    add_custom_category(chat_id, new_category)
+    @bot.api.send_message(chat_id: chat_id, text: "Category '#{new_category}' added successfully.")
+  end
+
+  # Add the custom category to Firestore
+  def add_custom_category(chat_id, new_category)
+    chat_doc = @firestore.doc("chats/#{chat_id}")
+    chat_data = chat_doc.get.data || {}
+
+    custom_categories = chat_data[:custom_categories] || []
+    custom_categories << new_category unless custom_categories.include?(new_category)
+
+    chat_doc.set({ custom_categories: custom_categories }, merge: true)
+    chat_doc.set({ expecting_new_category: false }, merge: true)
+  end
+
   def handle_category_selection(callback_data, chat_id, user_id)
+    # Remove the 'category_' prefix to get the category name
     category = callback_data.sub('category_', '')
 
-    if VALID_CATEGORIES.include?(category)
+    # Retrieve custom categories from Firestore
+    chat_doc = @firestore.doc("chats/#{chat_id}")
+    chat_data = chat_doc.get.data
+    custom_categories = chat_data[:custom_categories] || []
+
+    # Combine default categories with custom categories
+    all_categories = DEFAULT_CATEGORIES + custom_categories
+
+    if all_categories.include?(category)
+      # Reference to the pending expense document for the user
       pending_expense_ref = @firestore.doc("chats/#{chat_id}/pending_expenses/#{user_id}")
+      # Update the pending expense with the selected category
       pending_expense_ref.set({ category: category }, merge: true)
+
+      # Retrieve the updated expense data
       expense_data = pending_expense_ref.get.data
 
+      # Add the expense data to the transactions collection
       @firestore.collection("chats/#{chat_id}/transactions").add(expense_data)
+
+      # Delete the pending expense document
       pending_expense_ref.delete
 
-      @bot.api.send_message(chat_id: chat_id, text: "<b>#{expense_data[:user_first_name]}</b> added expense: <b>#{expense_data[:name]}</b> <b>#{expense_data[:amount]} #{expense_data[:currency]}</b> in Category <b>#{expense_data[:category]}</b>", parse_mode: "html")
+      # Send a confirmation message to the user
+      @bot.api.send_message(
+        chat_id: chat_id,
+        text: "<b>#{expense_data[:user_first_name]}</b> added expense: <b>#{expense_data[:name]}</b> <b>#{expense_data[:amount]} #{expense_data[:currency]}</b> in Category <b>#{expense_data[:category]}</b>",
+        parse_mode: "html"
+      )
     else
+      # Handle the case where an invalid category was selected
       @bot.api.send_message(chat_id: chat_id, text: "Invalid category selected.")
     end
   end
@@ -309,7 +386,8 @@ class ExpenseBot
 
   def send_settings_options(chat_id)
     kb = [
-      Telegram::Bot::Types::InlineKeyboardButton.new(text: 'Change Default Currency', callback_data: 'settings_currency')
+      Telegram::Bot::Types::InlineKeyboardButton.new(text: 'Change Default Currency', callback_data: 'settings_currency'),
+      Telegram::Bot::Types::InlineKeyboardButton.new(text: 'Add Categories', callback_data: 'settings_add_categories')
       #,Telegram::Bot::Types::InlineKeyboardButton.new(text: 'Change Default Timezone', callback_data: 'settings_timezone')
     ]
 
@@ -426,13 +504,17 @@ class ExpenseBot
 
   def ensure_chat_and_user(chat_id, user_id, first_name)
     chat_ref = @firestore.doc("chats/#{chat_id}")
-    chat_ref.set({ chat_id: chat_id }, merge: true)
+    chat_data = chat_ref.get.data || {}
+
+    unless chat_data.key?(:custom_categories)
+      chat_ref.set({ custom_categories: [] }, merge: true)
+    end
 
     user_ref = @firestore.doc("users/#{user_id}")
     user_ref.set({ user_id: user_id, first_name: first_name }, merge: true)
 
     chat_users_ref = @firestore.doc("chats/#{chat_id}/users/#{user_id}")
-    chat_users_ref.set({ user_id: user_id }, merge: true)
+    chat_users_ref.set({ user_id: user_id }, merge: true) 
   end
 
 
