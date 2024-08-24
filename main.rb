@@ -29,8 +29,11 @@ class ExpenseBot
     @firestore = Google::Cloud::Firestore.new project_id: ENV['GOOGLE_PROJECT_ID']
   end
 
-  def handle_webhook(update)
+  def is_private_chat?(message)
+    message['chat']['type'] == 'private'
+  end
 
+  def handle_webhook(update)
     if update['message'] && update['message']['text']
       handle_message(update['message'])
     elsif update['callback_query']
@@ -57,6 +60,11 @@ class ExpenseBot
       end
     end
 
+    if is_private_chat?(message)
+
+    end
+
+
     ## Category Creation
     if expecting_new_category?(chat_id)
       handle_category_creation(message)
@@ -64,28 +72,26 @@ class ExpenseBot
       case text
       when '/start'
         send_welcome_message(chat_id)
-      when "/start@#{BOT_USERNAME}"
-        send_welcome_message(chat_id)
       when '/help'
-        send_welcome_message(chat_id)
-      when "/start@#{BOT_USERNAME}"
-        send_welcome_message(chat_id)
+        #TODO
+        send_detailed_help_guide(chat_id)
       when '/stats'
-        send_stats(chat_id)
-      when "/stats@#{BOT_USERNAME}"
         send_stats(chat_id)
       when '/settings'
         send_settings_options(chat_id)
-      when "/settings@#{BOT_USERNAME}"
-        send_settings_options(chat_id)
       else
-        handle_expense_message(text, chat_id, user_id, first_name) if text.start_with?("@#{BOT_USERNAME}")
+        if is_private_chat?(message)
+          handle_expense_message(text, chat_id, user_id, first_name)
+        elsif text.start_with?("@#{BOT_USERNAME}")
+          #if true, then strip the bot's username from the message
+          handle_expense_message(text.sub("@#{BOT_USERNAME}", "").strip, chat_id, user_id, first_name)
+        end
       end
     end
   end
 
   def handle_expense_message(text, chat_id, user_id, first_name)
-    if text.match(/^@#{BOT_USERNAME}\s+(.+?)\s+\$?([+-]?\d+(\.\d{1,2})?)\s*(\w{3})?$/)
+    if text.match(/^(.+?)\s+\$?([+-]?\d+(\.\d{1,2})?)\s*(\w{3})?$/)
       item, amount, currency = parse_expense_message(text, chat_id)
       is_income = amount.start_with?('+')
       amount = amount.to_f.abs
@@ -140,7 +146,7 @@ class ExpenseBot
   end 
 
   def parse_expense_message(text, chat_id)
-    match_data = text.match(/^@#{BOT_USERNAME}\s+(.+?)\s+\$?([+-]?\d+(\.\d{1,2})?)\s*(\w{3})?$/)
+    match_data = text.match(/^(.+?)\s+\$?([+-]?\d+(\.\d{1,2})?)\s*(\w{3})?$/)
     item = match_data[1].strip
     amount = match_data[2]
     currency = match_data[4] ? match_data[4].upcase : fetch_default_currency(chat_id)
