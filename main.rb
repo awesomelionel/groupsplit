@@ -54,14 +54,21 @@ class ExpenseBot
     ## Edit Expense
     if message['reply_to_message']
       original_message = message['reply_to_message']['text']
-      if original_message.match(/^@#{BOT_USERNAME}\s+(.+?)\s+\$?([+-]?\d+(\.\d{1,2})?)\s*(\w{3})?$/)
-        edit_expense(original_message, text, chat_id, user_id)
-        return
+      if is_private_chat?(message)
+        if original_message.match(/^(.+?)\s+\$?([+-]?\d+(\.\d{1,2})?)\s*(\w{3})?$/)
+          edit_expense(original_message, text, chat_id, user_id)
+          return
+        end
+      else
+        if original_message.match(/^@#{BOT_USERNAME}\s+(.+?)\s+\$?([+-]?\d+(\.\d{1,2})?)\s*(\w{3})?$/)
+          edit_expense(original_message, text, chat_id, user_id, is_group_chat: true)
+          return
+        end
       end
     end
 
     if is_private_chat?(message)
-
+      message['chat']['type'] == 'private'
     end
 
 
@@ -502,7 +509,8 @@ class ExpenseBot
 
 
   ### Handle Edit Expense Func
-  def edit_expense(original_message, new_text, chat_id, user_id)
+  def edit_expense(original_message, new_text, chat_id, user_id, is_group_chat: false)
+
     # Retrieve the default currency from Firestore
     chat_ref = @firestore.doc("chats/#{chat_id}")
     chat_data = chat_ref.get.data || {}
@@ -511,8 +519,13 @@ class ExpenseBot
     puts default_currency
 
     # Parse the original and new expense messages
-    original_match = original_message.match(/^@#{BOT_USERNAME}\s+(.+?)\s+\$?([+-]?\d+(\.\d{1,2})?)\s*(\w{3})?$/)
-    new_match = new_text.match(/^@#{BOT_USERNAME}\s+(.+?)\s+\$?([+-]?\d+(\.\d{1,2})?)\s*(\w{3})?$/)
+    original_match = is_group_chat ? 
+      original_message.match(/^@#{BOT_USERNAME}\s+(.+?)\s+\$?([+-]?\d+(\.\d{1,2})?)\s*(\w{3})?$/) :
+      original_message.match(/^(.+?)\s+\$?([+-]?\d+(\.\d{1,2})?)\s*(\w{3})?$/)
+    
+    new_match = is_group_chat ?
+      new_text.match(/^@#{BOT_USERNAME}\s+(.+?)\s+\$?([+-]?\d+(\.\d{1,2})?)\s*(\w{3})?$/) :
+      new_text.match(/^(.+?)\s+\$?([+-]?\d+(\.\d{1,2})?)\s*(\w{3})?$/)
 
     if original_match && new_match
       # Extract original and new expense details
