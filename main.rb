@@ -236,7 +236,8 @@ class ExpenseBot
   end
 
   def prompt_for_custom_category(chat_id)
-    @bot.api.send_message(chat_id: chat_id, text: "Please send the name of the new category you'd like to add:")
+    @bot.api.send_message(chat_id: chat_id, text: "Please send the name of the new category you'd like to add or type 'Cancel' to abort.")
+
     # Set the expecting_new_category flag to true
     chat_doc = @firestore.doc("chats/#{chat_id}")
     chat_doc.set({ expecting_new_category: true }, merge: true)
@@ -255,13 +256,24 @@ class ExpenseBot
     chat_id = message['chat']['id'].to_s
     new_category = message['text'].strip
 
+    if new_category.downcase == 'cancel'
+      reset_expecting_new_category(chat_id)
+      @bot.api.send_message(chat_id: chat_id, text: "Category creation cancelled.")
+      return
+    end
+
     if new_category.empty?
-      @bot.api.send_message(chat_id: chat_id, text: "Category name cannot be empty. Please try again.")
+      @bot.api.send_message(chat_id: chat_id, text: "Category name cannot be empty. Please try again or type 'Cancel' to abort.")
       return
     end
 
     add_custom_category(chat_id, new_category)
     @bot.api.send_message(chat_id: chat_id, text: "Category '#{new_category}' added successfully.")
+  end
+
+  def reset_expecting_new_category(chat_id)
+    chat_doc = @firestore.doc("chats/#{chat_id}")
+    chat_doc.set({ expecting_new_category: false }, merge: true)
   end
 
   # Add the custom category to Firestore
