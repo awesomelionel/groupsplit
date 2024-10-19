@@ -569,6 +569,56 @@ class ExpenseBot
     end
   end
 
+  def send_detailed_help_guide(chat_id)
+    help_text = <<~HELP
+      <b>📊 Expense Tracker Bot - Detailed Help Guide</b>
+
+      <b>1. Adding Expenses:</b>
+      • Format: <code>[Item] [Amount] [Currency]</code>
+      • Example: <code>Lunch 15 SGD</code> or <code>Coffee 5</code>
+      • For income, use '+': <code>Salary +3000 SGD</code>
+      • Default currency is SGD if not specified
+
+      <b>2. Categories:</b>
+      • Select a category when prompted after adding an expense
+      • Default categories: 🏠 Housing, 🛒 Groceries, 🍔 Food, etc.
+      • Add custom categories with /settings
+
+      <b>3. Editing Expenses:</b>
+      • Reply to the expense message with the corrected information
+      • Example: Reply with <code>Coffee 6 SGD</code> to update
+
+      <b>4. Viewing Statistics:</b>
+      • Use /stats to see monthly expense breakdown
+      • Shows total expenses, category percentages, and user balances
+
+      <b>5. Settings:</b>
+      • Use /settings to access the settings menu
+      • Change default currency
+      • Add custom categories
+
+      <b>6. Commands:</b>
+      • /start - Welcome message and basic instructions
+      • /help - Show this detailed help guide
+      • /stats - View monthly expense statistics
+      • /settings - Access bot settings
+      • /deletecategory - Delete a custom category
+
+      <b>7. Group Chat Usage:</b>
+      • In group chats, start your message with @#{BOT_USERNAME}
+      • Example: <code>@#{BOT_USERNAME} Dinner 30 SGD</code>
+
+      <b>8. Tips:</b>
+      • Use specific item names for better tracking
+      • Regularly check /stats to monitor your spending
+      • Add expenses promptly for accurate tracking
+
+      For any issues or suggestions, please DM me @linotan
+    HELP
+
+    @bot.api.send_message(chat_id: chat_id, text: help_text, parse_mode: "HTML")
+  end
+
 end
 # Initialize the bot
 expense_bot = ExpenseBot.new
