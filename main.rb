@@ -80,7 +80,6 @@ class ExpenseBot
       when '/start'
         send_welcome_message(chat_id)
       when '/help'
-        #TODO
         send_detailed_help_guide(chat_id)
       when '/stats'
         send_stats(chat_id)
@@ -220,21 +219,126 @@ class ExpenseBot
     chat_id = callback_query['message']['chat']['id'].to_s
     user_id = callback_query['from']['id'].to_s
 
-    if callback_data.start_with?('category_')
+    case callback_data
+    when /^category_/
       handle_category_selection(callback_data, chat_id, user_id)
-    elsif callback_data.start_with?('settings_currency')
+    when 'settings_currency'
       send_currency_keyboard(chat_id)
-    elsif callback_data.start_with?('currency_')
+    when /^currency_/
       handle_currency_selection(callback_data, chat_id)
-    elsif callback_data.start_with?('settings_timezone')
+    when 'settings_timezone'
       send_timezone_keyboard(chat_id)
-    elsif callback_data.start_with?('timezone_')
+    when /^timezone_/
       handle_timezone_selection(callback_data, chat_id)
-    elsif callback_data.start_with?('settings_add_categories')
+    when 'settings_add_categories'
       prompt_for_custom_category(chat_id)
+    when 'settings_remove_categories'
+      prompt_for_remove_custom_category(chat_id)
+    when /^remove_category_/
+      handle_remove_category_selection(callback_data, chat_id)
+    when /^confirm_remove_category_/
+      handle_remove_category_confirmation(callback_data, chat_id)
+    when 'cancel_remove_category'
+      handle_cancel_remove_category(chat_id)
     end
   end
 
+  # Add this new method
+  def handle_cancel_remove_category(chat_id)
+    @bot.api.send_message(chat_id: chat_id, text: "Category removal cancelled.")
+  end
+
+  # Prompt for removing custom category
+  def prompt_for_remove_custom_category(chat_id)
+    chat_doc = @firestore.doc("chats/#{chat_id}")
+    chat_data = chat_doc.get.data
+    custom_categories = chat_data[:custom_categories] || []
+  
+    if custom_categories.empty?
+      @bot.api.send_message(chat_id: chat_id, text: "You don't have any custom categories to remove.")
+      return
+    end
+  
+    kb = custom_categories.map do |category|
+      Telegram::Bot::Types::InlineKeyboardButton.new(text: category, callback_data: "remove_category_#{category}")
+    end.each_slice(2).to_a
+  
+    @bot.api.send_message(
+      chat_id: chat_id,
+      text: "Select a custom category to remove:",
+      reply_markup: Telegram::Bot::Types::InlineKeyboardMarkup.new(inline_keyboard: kb)
+    )
+  end
+
+  # Prompt for removing custom category
+  def handle_remove_category_selection(callback_data, chat_id)
+    category = callback_data.sub('remove_category_', '')
+    puts "Category: #{category}"
+    expenses_count = count_expenses_with_category(chat_id, category)
+  
+    if expenses_count > 0
+      kb = [
+        Telegram::Bot::Types::InlineKeyboardButton.new(text: "Yes", callback_data: "confirm_remove_category_#{category}"),
+        Telegram::Bot::Types::InlineKeyboardButton.new(text: "No", callback_data: "cancel_remove_category")
+      ]
+  
+      @bot.api.send_message(
+        chat_id: chat_id,
+        text: "There are #{expenses_count} expenses with the category '#{category}'. These will be recategorized as 'Uncategorized'. Are you sure you want to remove this category?",
+        reply_markup: Telegram::Bot::Types::InlineKeyboardMarkup.new(inline_keyboard: [kb])
+      )
+    else
+      remove_category(chat_id, category)
+      @bot.api.send_message(chat_id: chat_id, text: "Category '#{category}' has been removed.")
+    end
+  end
+  
+  # Handle confirmation of removing custom category
+  def handle_remove_category_confirmation(callback_data, chat_id)
+    category = callback_data.sub('confirm_remove_category_', '')
+    remove_category_and_recategorize_expenses(chat_id, category)
+    @bot.api.send_message(chat_id: chat_id, text: "Category '#{category}' has been removed and associated expenses have been recategorized as 'Uncategorized'.")
+  end
+  
+  # Count expenses with a specific category
+  def count_expenses_with_category(chat_id, category)
+    begin
+      query = @firestore.collection("chats/#{chat_id}/transactions")
+                        .where("category", "==", category)
+      
+      count = query.get.count
+      
+      count
+    rescue => e
+      puts "Error counting expenses: #{e.message}"
+      puts e.backtrace.join("\n")
+      0  # Return 0 if there's an error, to avoid nil
+    end
+  end
+  
+  # Remove a custom category
+  def remove_category(chat_id, category)
+    chat_doc = @firestore.doc("chats/#{chat_id}")
+    chat_data = chat_doc.get.data
+    custom_categories = chat_data[:custom_categories] || []
+    custom_categories.delete(category)
+    chat_doc.set({ custom_categories: custom_categories }, merge: true)
+  end
+ 
+  # Remove a custom category and recategorize expenses
+  def remove_category_and_recategorize_expenses(chat_id, category)
+    # Remove the category
+    remove_category(chat_id, category)
+  
+    # Recategorize expenses
+    @firestore.collection("chats/#{chat_id}/transactions")
+              .where("category", "==", category)
+              .get.each do |transaction|
+      transaction.reference.set({ category: "Uncategorized" }, merge: true)
+    end
+  end
+
+  # Prompt for adding custom category
   def prompt_for_custom_category(chat_id)
     @bot.api.send_message(chat_id: chat_id, text: "Please send the name of the new category you'd like to add or type 'Cancel' to abort.")
 
@@ -243,6 +347,7 @@ class ExpenseBot
     chat_doc.set({ expecting_new_category: true }, merge: true)
   end
 
+  # Prompt for removing custom category
   def expecting_new_category?(chat_id)
     # Check Firestore for a state flag indicating if the bot is expecting a new category
     chat_doc = @firestore.doc("chats/#{chat_id}")
@@ -320,7 +425,7 @@ class ExpenseBot
         chat_id: chat_id,
         text: "<b>#{expense_data[:user_first_name]}</b> added expense: <b>#{expense_data[:name]}</b> <b>#{expense_data[:amount]} #{expense_data[:currency]}</b> in Category <b>#{expense_data[:category]}</b>",
         parse_mode: "html"
-      )
+        )
     else
       # Handle the case where an invalid category was selected
       @bot.api.send_message(chat_id: chat_id, text: "Invalid category selected.")
@@ -387,8 +492,8 @@ class ExpenseBot
   def send_settings_options(chat_id)
     kb = [
       Telegram::Bot::Types::InlineKeyboardButton.new(text: 'Change Default Currency', callback_data: 'settings_currency'),
-      Telegram::Bot::Types::InlineKeyboardButton.new(text: 'Add Categories', callback_data: 'settings_add_categories')
-      #,Telegram::Bot::Types::InlineKeyboardButton.new(text: 'Change Default Timezone', callback_data: 'settings_timezone')
+      Telegram::Bot::Types::InlineKeyboardButton.new(text: 'Add Categories', callback_data: 'settings_add_categories'),
+      Telegram::Bot::Types::InlineKeyboardButton.new(text: 'Remove Categories', callback_data: 'settings_remove_categories')
     ]
 
     @bot.api.send_message(
@@ -636,3 +741,4 @@ post '/webhook' do
     status 403
   end
 end
+
