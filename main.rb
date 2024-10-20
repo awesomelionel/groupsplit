@@ -457,12 +457,27 @@ class ExpenseBot
   end
 
   def send_welcome_message(chat_id)
-    welcome_message_text = "<b>Hello!</b> I am your Expense Tracker Bot!\n\n" \
-                          "Please add transactions in the format: '@#{BOT_USERNAME} [Item] [Amount] [currency (optional)]'.\n\n" \
-                          "For example, '@#{BOT_USERNAME} Lunch 20 SGD' or '@#{BOT_USERNAME} Starbucks Coffee 20'.\n\n" \
-                          "You can even add Income with '@#{BOT_USERNAME} Salary +2000 SGD'.\n\n" \
-                          "The Default currency is SGD. You can change it in the '/settings' command. \n\n" \
-                          "For more information, use the '/help' command.";
+    welcome_message_text = <<~WELCOME
+      👋 <b>Welcome to your Personal Expense Tracker Bot!</b>
+
+      I'm here to help you manage your expenses effortlessly. Here's how to get started:
+
+      📝 <b>Adding Expenses:</b>
+      • Format: <code>[Item] [Amount] [Currency]</code>
+      • Example: <code>Lunch 15 SGD</code> or <code>Coffee 5</code>
+      • For income, use '+': <code>Salary +3000 SGD</code>
+
+      💡 <b>Quick Tips:</b>
+      • Default currency is SGD if not specified
+      • In group chats, start with @#{BOT_USERNAME}
+      • Use /stats to view your monthly breakdown
+      • Adjust settings with /settings, you can add and remove custom categories and change your currency
+
+      🆘 <b>Need Help?</b>
+      Type /help for a detailed guide on all features.
+
+      Ready to start tracking your expenses? Go ahead and add your first transaction!
+    WELCOME
 
     @bot.api.send_message(chat_id: chat_id, text: welcome_message_text, parse_mode: "html" )
   end
