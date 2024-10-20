@@ -91,6 +91,8 @@ class ExpenseBot
         elsif text.start_with?("@#{BOT_USERNAME}")
           #if true, then strip the bot's username from the message
           handle_expense_message(text.sub("@#{BOT_USERNAME}", "").strip, chat_id, user_id, first_name)
+        else
+          send_welcome_message(chat_id)
         end
       end
     end
@@ -117,7 +119,7 @@ class ExpenseBot
         store_income(chat_id, user_id)
       end
     else
-      send_invalid_format_message(chat_id)
+      send_welcome_message(chat_id)
     end
   end
 
@@ -202,16 +204,6 @@ class ExpenseBot
     pending_expense_ref.delete
 
     @bot.api.send_message(chat_id: chat_id, text: "<b>#{expense_data[:user_first_name]}</b> added income: #{expense_data[:name]}  $#{expense_data[:amount]} #{expense_data[:currency]}", parse_mode: "html")
-  end
-
-  def send_invalid_format_message(chat_id)
-    invalid_format_message_txt = "<b>Hello!</b>, I am your expense tracker bot.\n\n" \
-                          "Please add transactions in the format: '@#{BOT_USERNAME} [Item] [Amount] [currency (optional)]'.\n\n" \
-                          "For example, '@#{BOT_USERNAME} Lunch 20 SGD' or '@#{BOT_USERNAME} Starbucks Coffee 20'.\n\n" \
-                          "You can even add Income with '@#{BOT_USERNAME} Salary +2000 SGD'.\n\n" \
-                          "The Default currency is SGD. You can change it in the '/settings' command";
-
-    @bot.api.send_message(chat_id: chat_id, text: invalid_format_message_txt, parse_mode: "html" )
   end
 
   def handle_callback(callback_query)
